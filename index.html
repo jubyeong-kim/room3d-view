@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>스플랫 보기</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0f14;color:#e2e8f0;overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+  #c{display:block;width:100%;height:100%;touch-action:none}
+  #hud{position:fixed;left:12px;top:12px;max-width:min(380px,calc(100vw - 24px));
+    background:rgba(11,15,20,.9);border:1px solid #1e293b;border-radius:12px;
+    padding:12px 14px;font-size:12.5px;line-height:1.6;backdrop-filter:blur(6px)}
+  #hud h1{margin:0 0 6px;font-size:14px;color:#7dd3fc;font-weight:600}
+  #steps{margin:0;padding:0;list-style:none}
+  #steps li{padding:2px 0;color:#64748b}
+  #steps li.ok{color:#86efac}
+  #steps li.ok::before{content:"OK  ";color:#22c55e;font-weight:700}
+  #steps li.bad{color:#fca5a5}
+  #steps li.bad::before{content:"X   ";color:#ef4444;font-weight:700}
+  #steps li.run::before{content:"..  ";color:#eab308}
+  #steps li:not(.ok):not(.bad):not(.run)::before{content:"    "}
+  #steps .hint{display:block;margin:2px 0 4px 22px;color:#fca5a5;white-space:pre-wrap}
+  #ctl{position:fixed;right:12px;top:12px}
+  button{background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:8px;
+    padding:6px 11px;font-size:12px;cursor:pointer;margin:2px}
+  button:hover{background:#334155}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <h1>스플랫 보기</h1>
+  <ul id="steps">
+    <li id="s1">라이브러리 불러오기</li>
+    <li id="s2">렌더러 넣기</li>
+    <li id="s3">파일 받기</li>
+    <li id="s4">알갱이로 풀기</li>
+    <li id="s5">크기 재기</li>
+  </ul>
+</div>
+
+<div id="ctl">
+  <button id="flip">위아래 뒤집기</button>
+</div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/",
+  "@sparkjsdev/spark":"https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@2.1.0/dist/spark.module.js"
+}}
+</script>
+<script type="module">
+/* 여기 한 줄만 고치면 다른 파일을 띄웁니다. 같은 폴더에 있어야 합니다. */
+let SPLAT_FILE = "scene.sog";
+
+const el = id => document.getElementById(id);
+function mark(id, cls, text) {
+  const li = el(id);
+  li.className = cls;
+  const label = li.dataset.label ?? (li.dataset.label = li.textContent);
+  li.textContent = text ? `${label} — ${text}` : label;
+}
+function hint(id, msg) {
+  const li = el(id);
+  let h = li.querySelector(".hint");
+  if (!h) { h = document.createElement("span"); h.className = "hint"; li.appendChild(h); }
+  h.textContent = msg;
+}
+
+let THREE, OrbitControls, SPARK;
+try {
+  THREE = await import("three");
+  ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
+  SPARK = await import("@sparkjsdev/spark");
+  mark("s1", "ok");
+} catch (e) {
+  mark("s1", "bad");
+  hint("s1", "three.js 나 Spark 를 못 불러왔습니다. 인터넷 연결과 CDN 차단 여부를 보십시오.\n" + (e?.message ?? String(e)));
+  throw e;
+}
+
+const canvas = el("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f14);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 1000);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+camera.position.set(2, 1, 2);
+
+/* Spark 는 전용 렌더러를 장면에 넣어야 그린다.
+   이 두 줄을 빼면 알갱이를 다 읽고도 화면이 검은 채로 있고 오류도 안 난다. */
+let spark = null;
+try {
+  if (!SPARK.SparkRenderer) throw new Error("이 판의 Spark 에는 SparkRenderer 가 없습니다");
+  spark = new SPARK.SparkRenderer({ renderer });
+  scene.add(spark);
+  mark("s2", "ok");
+} catch (e) {
+  mark("s2", "bad");
+  hint("s2", "SparkRenderer 를 못 만들었거나 장면에 못 넣었습니다.\n" + (e?.message ?? String(e)));
+  throw e;
+}
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize); resize();
+
+mark("s3", "run");
+let buf;
+try {
+  const t0 = performance.now();
+  const r = await fetch(SPLAT_FILE);
+  if (!r.ok) throw new Error(`서버가 ${r.status} 를 돌려줬습니다`);
+  buf = await r.arrayBuffer();
+  const mb = (buf.byteLength / 1048576).toFixed(1);
+  const s = ((performance.now() - t0) / 1000).toFixed(1);
+  mark("s3", "ok", `${SPLAT_FILE} ${mb}MB, ${s}초`);
+} catch (e) {
+  mark("s3", "bad");
+  hint("s3", `"${SPLAT_FILE}" 를 못 받았습니다. ${(e?.message ?? String(e))}\n` +
+       "확인할 것: 1) 이 페이지와 같은 폴더에 파일이 있는지 (이름 철자, 대소문자)\n" +
+       "2) file:// 로 열지 않았는지 — 그러면 브라우저가 막습니다. 이 폴더에서\n" +
+       "python3 -m http.server 를 띄우고 http://localhost:8000 으로 여십시오.");
+  throw e;
+}
+
+/* 확장자와 Spark 안쪽 형식 이름이 다르다. .sog 는 "pcsogszip" 이다. */
+const TYPE_OF = { ply: "ply", spz: "spz", splat: "splat", ksplat: "ksplat", sog: "pcsogszip" };
+
+let mesh = null;
+mark("s4", "run");
+try {
+  const ext = SPLAT_FILE.split(".").pop().toLowerCase();
+  const fileType = TYPE_OF[ext];
+  if (!fileType) throw new Error(`대응표에 없는 확장자입니다: .${ext}`);
+  mesh = new SPARK.SplatMesh({ fileBytes: new Uint8Array(buf), fileType });
+  scene.add(mesh);
+  await mesh.initialized;
+  const n = mesh.packedSplats?.numSplats ?? 0;
+  if (!n) throw new Error("알갱이가 0개입니다");
+  mark("s4", "ok", `${n.toLocaleString("ko-KR")}개`);
+} catch (e) {
+  mark("s4", "bad");
+  hint("s4", "파일은 받았는데 알갱이로 못 풀었습니다. " + (e?.message ?? String(e)) + "\n" +
+       "확장자와 실제 형식이 맞는지, 3D 가우시안 스플랫 표준 열(scale, opacity, rot)이\n" +
+       "들어 있는 파일인지 보십시오.");
+  throw e;
+}
+
+/* three.js가 주는 바깥 상자(Box3.setFromObject)는 알갱이 덩어리에 대해
+   빈 상자를 돌려준다. Spark 가 주는 자(getBoundingBox)로 재야 한다. */
+function fit() {
+  mark("s5", "run");
+  let box = null;
+  try { box = mesh.getBoundingBox(true); } catch (e) {}
+  if (!box || box.isEmpty()) {
+    mark("s5", "bad");
+    hint("s5", "Spark 의 getBoundingBox 로 크기를 못 쟀습니다. 카메라를 기본 위치에 두었으니\n" +
+               "마우스로 끌어서 찾으십시오.");
+    camera.position.set(2, 1, 2); controls.target.set(0, 0, 0);
+    return;
+  }
+  const c = box.getCenter(new THREE.Vector3());
+  const radius = box.getSize(new THREE.Vector3()).length() * 0.5;
+  controls.target.copy(c);
+  camera.position.copy(c).add(new THREE.Vector3(radius * .9, radius * .35, radius * 1.1));
+  camera.near = Math.max(radius / 1000, 0.001);
+  camera.far = radius * 60;
+  camera.updateProjectionMatrix();
+  mark("s5", "ok", `반지름 ${radius.toFixed(2)}`);
+}
+fit();
+
+/* 이 모델은 Y 가 아래를 향한다. 거꾸로 서면 눌러서 확인한다. */
+el("flip").onclick = () => {
+  mesh.scale.y *= -1; mesh.scale.z *= -1;
+  mesh.updateMatrixWorld(true);
+  fit();
+};
+
+(function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
